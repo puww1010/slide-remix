@@ -10,9 +10,22 @@
 
 usage: python3 template_probe.py Template.pptx [--layout NAME] [--out probe.json] [--no-render]
 """
-import argparse, colorsys, glob, json, os, re, subprocess, sys, tempfile, zipfile
+import argparse, colorsys, glob, json, os, re, shutil, subprocess, sys, tempfile, zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 EMU = 914400
+
+DEMO_B64 = os.path.join(HERE, '..', 'examples', 'demo-template.pptx.b64')
+
+def resolve_template(t):
+    """'demo' -> the bundled fictional-brand template (stored as base64 text, decoded once into the temp dir;
+    the skill folder itself may be read-only). Any other value is returned unchanged."""
+    if t != 'demo': return t
+    import base64, hashlib
+    data = base64.b64decode(open(DEMO_B64).read())
+    out = os.path.join(tempfile.gettempdir(), 'slide-remix-demo-%s.pptx' % hashlib.sha1(data).hexdigest()[:8])
+    if not os.path.exists(out):
+        open(out, 'wb').write(data)
+    return out
 
 ROLE_HUE = {'orange': 18, 'blue': 225, 'green': 140, 'purple': 265, 'teal': 182}
 ROLE_ORDER = ('orange', 'blue', 'green', 'purple', 'teal')
@@ -90,7 +103,7 @@ def pick_layout(ls, want=None, family=''):
     if want:
         for l in ls:
             if l['name'] == want: return l
-        sys.exit(f'layout "{want}" not found; available: ' + ', '.join(l['name'] for l in ls))
+        sys.exit(f'[FAIL] layout "{want}" not found; available: ' + ', '.join(l['name'] for l in ls))
     def score(l):
         n = l['name'].lower(); s = 0
         if l['type'] == 'titleOnly' or 'title only' in n: s += 10
@@ -136,6 +149,21 @@ def title_info(z, layout_part, master_part, scale_px):
     return dict(box_px=[round(v, 1) for v in box], ins_px={k: round(v, 1) for k, v in ins.items()},
                 size_pt=size, anchor=anchor.group(1) if anchor else 't')
 
+def resolve_pptx_skill():
+    """Path of Anthropic's pptx skill (gives schema validation + a safe LibreOffice wrapper), or None.
+    PPTX_SKILL=none forces the built-in fallbacks; PPTX_SKILL=/path must contain scripts/office/validate.py."""
+    env = os.environ.get('PPTX_SKILL')
+    if env:
+        if env.lower() == 'none': return None
+        if os.path.exists(os.path.join(env, 'scripts/office/validate.py')): return os.path.abspath(env)
+        print(f'[WARN] PPTX_SKILL={env} has no scripts/office/validate.py — using built-in validation')
+        return None
+    for pat in ['/sessions/*/mnt/.claude/skills/pptx', os.path.expanduser('~/.claude/skills/pptx'),
+                os.path.join(HERE, '..', '..', 'pptx')]:
+        for h in glob.glob(pat):
+            if os.path.exists(os.path.join(h, 'scripts/office/validate.py')): return os.path.abspath(h)
+    return None
+
 def safe_bottom(template, layout_name, workdir, h_px):
     """Render the empty layout and find where footer decoration starts (in spec px)."""
     page = os.path.join(workdir, 'probe_page.py')
@@ -143,10 +171,18 @@ def safe_bottom(template, layout_name, workdir, h_px):
                           "def build():\n    return [shape('probe', 0.01, 0.01, 0.01, 0.01)]\n" % os.path.join(HERE, 'vendor'))
     out = os.path.join(workdir, 'probe.pptx')
     r = subprocess.run([sys.executable, os.path.join(HERE, 'vendor', 'build_slide.py'), '--template', template, '--page', page,
-                        '--out', out, '--layout', layout_name, '--qa-dir', workdir], capture_output=True, text=True)
+                        '--out', out, '--layout', layout_name, '--qa-dir', workdir, '--pptx-skill', resolve_pptx_skill() or 'none'],
+                       capture_output=True, text=True)
     jpgs = sorted(glob.glob(os.path.join(workdir, 'probe_stress*.jpg')))
-    if not jpgs: return None, (r.stdout + r.stderr)[-800:]
-    from PIL import Image
+    if not jpgs:
+        out = r.stdout + r.stderr
+        why = 'LibreOffice not found' if ('LibreOffice not found' in out or not (shutil.which('soffice') or shutil.which('libreoffice'))) else ('pdftoppm not found' if 'pdftoppm not found' in out
+              else 'empty-layout render failed')
+        return None, why
+    try:
+        from PIL import Image
+    except ImportError:
+        return None, 'Pillow not installed'
     im = Image.open(jpgs[0]).convert('L'); W, H = im.size; px = im.load()
     top_band = int(H * .55)
     first = None
@@ -158,15 +194,20 @@ def safe_bottom(template, layout_name, workdir, h_px):
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument('template'); ap.add_argument('--layout'); ap.add_argument('--out')
     ap.add_argument('--no-render', action='store_true'); a = ap.parse_args()
-    z = zipfile.ZipFile(a.template)
-    pres = z.read('ppt/presentation.xml').decode()
+    a.template = resolve_template(a.template)
+    if not os.path.isfile(a.template): sys.exit(f'[FAIL] template not found: {a.template}')
+    try:
+        z = zipfile.ZipFile(a.template); pres = z.read('ppt/presentation.xml').decode()
+        theme_colors(z)
+    except (zipfile.BadZipFile, KeyError, AttributeError, IndexError):
+        sys.exit(f'[FAIL] {a.template} is not a usable .pptx (PowerPoint) file — .potx/.key/.pdf are not supported; save it as .pptx')
     sz = re.search(r'<p:sldSz[^>]*>', pres).group(0)
     cx, cy = int(re.search(r'cx="(\d+)"', sz).group(1)), int(re.search(r'cy="(\d+)"', sz).group(1))
     w_in, h_in = cx / EMU, cy / EMU; scale_px = 1280 / w_in            # px per inch
     tc, master = theme_colors(z)
     roles, notes = map_colors(tc)
     ls = layouts(z); lay = pick_layout(ls, a.layout, slide1_family(z, ls))
-    if not lay: sys.exit('no Title Only / Blank layout found; pass --layout. Available: ' + ', '.join(l['name'] for l in ls))
+    if not lay: sys.exit('[FAIL] no Title Only / Blank layout found; pass --layout. Available: ' + ', '.join(l['name'] for l in ls))
     probe = dict(template=os.path.abspath(a.template), canvas=dict(w_in=w_in, h_in=h_in, px_per_in=scale_px,
                  h_px=round(h_in * scale_px, 1), pt_per_px=round(w_in * 72 / 1280, 4)),
                  theme=tc, colors=roles, color_notes=notes, layout=lay['name'],
@@ -174,6 +215,9 @@ def main():
     if not a.no_render:
         wd = tempfile.mkdtemp(prefix='probe_')
         sb, info = safe_bottom(a.template, lay['name'], wd, probe['canvas']['h_px'])
+        if sb is None:
+            sb = round(probe['canvas']['h_px'] * 680 / 720, 1)
+            print(f'[WARN] footer safe-area detection skipped ({info}); assuming content must stay above {sb:.0f}px')
         probe['safe_bottom_px'] = sb; probe['empty_layout_render'] = info
     out = a.out or os.path.splitext(a.template)[0] + '.probe.json'
     json.dump(probe, open(out, 'w'), ensure_ascii=False, indent=1)

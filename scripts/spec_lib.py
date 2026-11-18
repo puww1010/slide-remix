@@ -27,7 +27,7 @@ def cw(role):
     return COLOR_WORDS[role]
 
 def C(role, variant='base'):
-    assert role in ROLES + NEUTRALS, role
+    assert role in ROLES + NEUTRALS, f'unknown colour role {role!r}'
     return (role, variant)
 
 # ---------- primitives ----------
@@ -57,7 +57,7 @@ def CHK(cx, cy, r=10, name='Check'):
 
 def ICON(kind, cx, cy, s, color, name=None):
     """kind in ICON_KINDS. s = icon box size in px."""
-    assert kind in ICON_KINDS, kind
+    assert kind in ICON_KINDS, f'unknown ICON kind {kind!r}'
     return dict(k='icon', kind=kind, cx=cx, cy=cy, s=s, color=color, name=name or f'Icon {kind}')
 
 ICON_KINDS = ('person', 'people', 'globe', 'cloud', 'shield_ok', 'chip', 'building', 'test', 'deploy',

@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """spec.py + ANY template.pptx -> editable one-slide PPTX (native shapes, scheme colours) + stress-render QA.
 
-usage: python3 make_pptx.py --spec page_spec.py --template T.pptx --out OUT.pptx --qa-dir QA_DIR
+usage: python3 make_pptx.py --spec page_spec.py --template T.pptx|demo --out OUT.pptx --qa-dir QA_DIR
                             [--ea-font "PingFang SC" | "Microsoft YaHei"] [--layout NAME] [--source source_text.txt]
+exit codes: 0 ok (read [WARN] lines) · 1 [FAIL] — the PPTX is missing or must not be delivered
 Steps: template_probe (cached as OUT.probe.json) -> title fit -> vendor/build_slide.py (validate, diff vs template,
 lint, 6 % stress render) -> text checks.
 """
 import argparse, json, os, re, subprocess, sys
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import spec_lib as L
-from make_html import load_spec, text_check
+from make_html import load_spec, build_primitives, text_check, fail
+from template_probe import resolve_pptx_skill, resolve_template
 
 def main():
     ap = argparse.ArgumentParser()
@@ -19,14 +21,32 @@ def main():
     ap.add_argument('--color', action='append', default=[], metavar='ROLE=SCHEME',
                     help='override the automatic mapping, e.g. --color orange=accent1 (repeatable)')
     a = ap.parse_args()
+    a.template = resolve_template(a.template)
+    import zipfile
+    if not os.path.isfile(a.template): fail(f'template not found: {a.template}')
+    try:
+        zipfile.ZipFile(a.template).read('ppt/presentation.xml')
+    except (zipfile.BadZipFile, KeyError):
+        fail(f'{a.template} is not a .pptx (PowerPoint) file — .potx/.key/.pdf are not supported; save it as .pptx')
+    out_dir = os.path.dirname(os.path.abspath(a.out))
+    if not os.path.isdir(out_dir) or not os.access(out_dir, os.W_OK): fail(f'output folder not writable: {out_dir}')
+    build_primitives(load_spec(a.spec), a.spec)        # fail fast on spec problems, before the slow probe
+    skill = resolve_pptx_skill()
     probe_path = os.path.splitext(a.out)[0] + '.probe.json'
     if a.reprobe or not os.path.exists(probe_path) or json.load(open(probe_path)).get('template') != os.path.abspath(a.template) \
             or (a.layout and json.load(open(probe_path)).get('layout') != a.layout):
         cmd = [sys.executable, os.path.join(HERE, 'template_probe.py'), a.template, '--out', probe_path]
         if a.layout: cmd += ['--layout', a.layout]
-        subprocess.run(cmd, check=True, capture_output=True)
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        for line in (r.stdout + r.stderr).splitlines():
+            if line.startswith('[WARN]'): print(line)
+        if r.returncode:
+            err = [l for l in (r.stdout + r.stderr).splitlines() if l.strip()]
+            fail(next((l[7:] for l in err if l.startswith('[FAIL]')), 'template probe failed: ' + (err[-1] if err else '?')))
     probe = json.load(open(probe_path))
     for ov in a.color:
+        if '=' not in ov or ov.split('=')[1] not in probe['theme'] or ov.split('=')[0] not in L.ROLES:
+            fail(f'--color {ov}: expected ROLE=accentN, ROLE in {", ".join(L.ROLES)}, scheme in {", ".join(probe["theme"])}')
         role, sch = ov.split('=')
         import colorsys
         from template_probe import rel_lum, hue_word
@@ -47,7 +67,7 @@ def main():
 
     m = load_spec(a.spec)
     L.COLOR_WORDS.update({r: probe['colors'][r].get('word', L.COLOR_WORDS[r]) for r in L.ROLES if r in probe['colors']})
-    P = m.build_spec(); texts = L.all_text(P) + [m.TITLE]
+    P = build_primitives(m, a.spec); texts = L.all_text(P) + [m.TITLE]
     cjk = any(L.is_cjk(ch) for t in texts for ch in t)
     if cjk and not a.ea_font:
         sys.exit('[FAIL] page has Chinese text: ask the user which CJK font to use, then pass --ea-font')
@@ -88,13 +108,32 @@ def main():
     env = dict(os.environ, SLIDE_REMIX_SPEC=os.path.abspath(a.spec), SLIDE_REMIX_PROBE=os.path.abspath(probe_path),
                SLIDE_REMIX_TITLE=json.dumps(title))
     cmd = [sys.executable, os.path.join(HERE, 'vendor', 'build_slide.py'), '--template', a.template,
-           '--page', os.path.join(HERE, 'to_pptx.py'), '--out', a.out, '--layout', probe['layout'], '--qa-dir', a.qa_dir]
+           '--page', os.path.join(HERE, 'to_pptx.py'), '--out', a.out, '--layout', probe['layout'], '--qa-dir', a.qa_dir,
+           '--pptx-skill', skill or 'none']
     if cjk: cmd += ['--lang', 'zh', '--ea-font', a.ea_font]
     r = subprocess.run(cmd, env=env, capture_output=True, text=True)
     log = r.stdout + r.stderr
     for line in log.splitlines():
-        if line.startswith('[') and not line.startswith('[text on slide]'): print(line)
-    if r.returncode: print(log[-2000:]); sys.exit('[FAIL] build_slide failed')
+        if line.startswith('[') and not line.startswith(('[text on slide]', '[validate:basic] ISSUES')): print(line)
+    if r.returncode:
+        err = [l for l in log.splitlines() if l.strip()]
+        fail(next((l[7:] for l in err if l.startswith('[FAIL]')), 'PPTX build failed: ' + (err[-1] if err else '?'))
+             + ' (if this names your spec, fix the spec; otherwise rerun doctor.py)')
+    vline = next((l for l in log.splitlines() if l.startswith('[validate')), '')
+    if vline.startswith('[validate:basic]') and 'PASSED' not in vline:
+        # built-in check: judge only issues our build added (some templates trip it already, e.g. attribute order)
+        sys.path.insert(0, os.path.join(HERE, 'vendor')); import build_slide as BS
+        new = sorted(set(BS.basic_validate(a.out)) - set(BS.basic_validate(a.template)))
+        vline = ('[validate:basic] PASSED (pre-existing template findings ignored)' if not new
+                 else '[validate:basic] new issues: ' + '; '.join(new[:3]))
+        print(vline)
+    if not ('PASSED' in vline):
+        fail(f'validate: {vline or "no validation result"} — do not deliver this file; rerun doctor.py and check the template')
+    if '[qa render] [' not in log or "[qa render] []" in log:
+        import shutil
+        why = ('LibreOffice not installed' if 'LibreOffice not found' in log or not (shutil.which('soffice') or shutil.which('libreoffice')) else 'pdftoppm not installed' if 'pdftoppm not found' in log
+               else 'LibreOffice timed out' if 'timed out' in log else 'render produced no image')
+        print(f'[WARN] no preview render: {why}; visual QA skipped — tell the user and ask them to check the slide in PowerPoint')
     slide_txt = log.split('[text on slide]', 1)[-1]
     norm = lambda s: ''.join(s.replace('‑', '-').split())
     lost = [t for t in texts if norm(t) and norm(t) not in norm(slide_txt)]
