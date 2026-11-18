@@ -27,3 +27,6 @@ Requirements: Python 3, Pillow, LibreOffice + pdftoppm (for the PPTX QA render),
 
 ## Credits
 `scripts/vendor/` (slidekit.py, build_slide.py, list_layouts.py) comes from [screenshot-to-template-slide](https://github.com/puww1010/screenshot-to-template-slide), MIT License — see `scripts/vendor/LICENSE-screenshot-to-template-slide`. Example names and content are fictional or generic.
+
+## License
+MIT — see [LICENSE](LICENSE).
