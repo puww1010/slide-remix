@@ -1,4 +1,4 @@
-# slide-remix
+# slide-remix  · v1.1
 
 A Claude skill that turns a slide screenshot, an article diagram or rough notes into a clean, flat 16:9 diagram — as **HTML + PNG** and, from the same layout spec, as an **editable PPTX on any .pptx template** (native shapes, template theme colours).
 
@@ -15,18 +15,25 @@ Zip this folder as `slide-remix.skill` (`zip -r slide-remix.skill slide-remix`) 
 
 ## Quick start (CLI)
 ```bash
+python3 scripts/doctor.py --need html,png,pptx,preview       # what this machine can produce, with install hints
+bash tests/run_examples.sh /tmp/reg                           # all examples on the bundled demo template
 python3 scripts/make_html.py --spec examples/steps_pipeline.py --out out.html --png out.png
 python3 scripts/make_pptx.py --spec examples/steps_pipeline.py --template YourTemplate.pptx \
-    --out out.pptx --qa-dir QA --ea-font "Microsoft YaHei"
+    --out out.pptx --qa-dir QA --ea-font "Microsoft YaHei"   # --template demo = bundled demo template
 bash tests/run_examples.sh /tmp/reg YourTemplate.pptx      # regression over all examples
 ```
-Requirements: Python 3, Pillow, LibreOffice + pdftoppm (for the PPTX QA render), playwright (auto-installed).
+Requirements: Python 3.8+, Pillow, LibreOffice + pdftoppm (for the PPTX QA render), playwright (auto-installed, 120 s budget).
+Exit codes: `0` ok (read `[WARN]` lines) · `1` `[FAIL]`, don't deliver · `2` (make_html) HTML ok, PNG screenshot failed.
+`scripts/crop.py` zooms into screenshots for slide forensics.
 
 ## Layout
 `SKILL.md` (instructions) · `scripts/` · `examples/` (three-zone architecture, phase pipeline, simple N-step flow, card grid) · `references/` (design system, layout patterns, analysis checklist, lessons) · `tests/`.
 
 ## Credits
-`scripts/vendor/` (slidekit.py, build_slide.py, list_layouts.py) comes from [screenshot-to-template-slide](https://github.com/puww1010/screenshot-to-template-slide), MIT License — see `scripts/vendor/LICENSE-screenshot-to-template-slide`. Example names and content are fictional or generic.
+`scripts/vendor/` (slidekit.py, build_slide.py, list_layouts.py) comes from [screenshot-to-template-slide](https://github.com/puww1010/screenshot-to-template-slide), MIT License — see `scripts/vendor/LICENSE-screenshot-to-template-slide`. The demo template (fictional ACME brand, stored as `examples/demo-template.pptx.b64`) is from the same project, same author, MIT. Example names and content are fictional or generic.
+
+## Changelog
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 MIT — see [LICENSE](LICENSE).

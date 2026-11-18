@@ -1,0 +1,9 @@
+# source text for examples/simple_steps.py — one item per line, lines starting with # are comments
+零信任访问三步走
+1. 识别身份
+用户与设备双重认证
+2. 评估风险
+实时检查设备姿态与行为
+3. 最小授权
+按应用粒度放行，持续验证
+每一次访问都要重新证明自己

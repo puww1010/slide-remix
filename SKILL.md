@@ -1,5 +1,7 @@
 ---
 name: slide-remix
+metadata:
+  version: "1.1"
 description: 拆解 slide 截图（用什么做的、要准备哪些素材、怎么复刻），以及把公众号图、截图或零散笔记重绘成统一的扁平风 16:9 架构图（HTML + PNG），并用同一份布局套任意 .pptx 模版出可编辑 PPTX。当用户说"分析这个 slide 是用什么做的 / 拆解这张图 / 做一个类似的 / 按 A 路线做 / 把这张图做成 html 和 pptx / 套这个模版转成 pptx / 同样的逻辑再做一张"时使用。
 ---
 
@@ -16,6 +18,14 @@ description: 拆解 slide 截图（用什么做的、要准备哪些素材、怎
 | C 套模版出 PPTX | "用这个模版转成 pptx / 也要 pptx" | `<前缀>_<主题>.pptx` + 预览图 |
 
 只想把一张截图原样转成可编辑 PPT、不改风格的，用 `image-to-editable-ppt`；想把已有页面原样套进公司模版、按原图清理对齐的，用 `screenshot-to-template-slide`。这两种情况都不用本 skill。
+
+## 第 0 步：运行前检查（每次都做）
+```bash
+python3 ${CLAUDE_SKILL_DIR}/scripts/doctor.py --need html,png,pptx,preview [--template T.pptx]
+```
+- 按 `[summary]` 告诉用户这台机器能做哪些产物：例如 "PNG 截图做不了（缺浏览器），HTML 和 PPTX 可以"。缺的工具照 `fix:` 行给出安装办法；`--fix` 会尝试自动安装不需要 root 的部分（playwright、Chromium、Linux 系统库）。
+- `--need` 只写用户这次要的产物。退出码 1 表示要的产物里有做不了的，先和用户确认是改做其他产物，还是先装工具。
+- 没有用户模版、只想试一下 PPTX 效果时，加 `--template demo`，用自带的虚构品牌示例模版（以 base64 文本存放在 `examples/demo-template.pptx.b64`，脚本首次使用时自动解码到临时目录）。
 
 ## 开场：一次问清楚（用 AskUserQuestion）
 1. **要哪些产物**：只要 HTML/PNG，还是同时要 PPTX？要 PPTX 就确认模版文件。
@@ -47,6 +57,7 @@ description: 拆解 slide 截图（用什么做的、要准备哪些素材、怎
    ```bash
    python3 ${CLAUDE_SKILL_DIR}/scripts/make_html.py --spec page.py --out OUT.html --png OUT.png --source source_text.txt
    ```
+   文字清单的写法见 `examples/simple_steps.source.txt`。
    用 Read 打开 PNG，按 `references/lessons.md` 的清单检查：重叠、溢出、标签被线切开、贴边、留白。`[text check] missing` 必须是 none，`added` 列出的就是要向用户报告的补充文字。
 5. **出 PPTX**（模式 C）：
    ```bash
@@ -66,6 +77,22 @@ description: 拆解 slide 截图（用什么做的、要准备哪些素材、怎
    - 标题字号或位置有没有在本页调整（`[title]` 行）；
    - 字体提醒（`[NOTE] font`）；
    - 预览图是 LibreOffice 渲染的，请用户在 PowerPoint 里再看一遍。
+
+## 常见失败与处理
+所有脚本只用三种退出码：0 成功（但要读 `[WARN]` 行）、1 `[FAIL]` 不能交付、2 只用于 make_html，表示 HTML 已生成、PNG 截图失败。
+
+| 输出 | 意思 | 怎么做 / 怎么告诉用户 |
+|---|---|---|
+| `[FAIL] spec … raised … unknown colour role / ICON kind` | spec 写错 | 按提示改 spec 里那一行，重跑 |
+| `[FAIL] spec file not found` / `must define TITLE and build_spec()` | 路径或结构不对 | 修正路径；照 examples 补齐 TITLE 和 build_spec |
+| `[FAIL] template not found` / `is not a .pptx` | 模版路径错或格式不对 | 请用户提供 .pptx（.potx / Keynote / PDF 先另存为 .pptx） |
+| `[FAIL] layout … not found` / `no Title Only / Blank layout` | 自动选不到版式 | 用 `--layout "<版式名>"` 指定，版式名在 probe.json 的 `layouts` 里 |
+| `[FAIL] validate: …` | 生成的文件没通过校验 | 不要交付；重跑 doctor，换模版或把报错发给维护者 |
+| `[png] FAILED: …`（退出码 2） | 截图环境缺东西（浏览器、系统库、离线） | HTML 照常交付，告诉用户 PNG 没做成及原因；可以 `doctor.py --fix` 后重跑，或请用户在浏览器里打开 HTML 自己截图 |
+| `[WARN] no preview render: …` | 没装 LibreOffice / pdftoppm，PPTX 已生成但没做视觉检查 | 交付时明确说"这页没做渲染检查，请在 PowerPoint 里看一遍"，并给出安装办法 |
+| `[WARN] footer safe-area detection skipped` | 测不了模版页脚位置，按 680px 估 | 内容尽量放在 y≈650 以上；交付时提醒检查页脚是否被遮挡 |
+| `[WARN] roles … all map to …` | 两个语义色在这个模版里成了同一种颜色 | 用 `--color ROLE=accentN` 指定，或靠图标、文字区分 |
+| `[validate:basic] PASSED (pre-existing template findings ignored)` | 没有 Anthropic pptx skill，用了内置的基本校验；模版本身的问题不算 | 可以交付；需要更严格的校验时装 pptx skill |
 
 ## spec API（`scripts/spec_lib.py`）
 spec 文件放在任何目录都可以，直接写 `from spec_lib import *` 即可，两个脚本会自动把 `scripts/` 加进 sys.path。
@@ -104,10 +131,13 @@ def build_spec():
 - `variant`：`base`、`fill`（约 7% 浅色底）、`bg`（约 10%）、`border`（约 40%）、`dark`（加深 50%）。
 
 ## 文件
-- `scripts/make_html.py`：spec → HTML + PNG。截图依赖 playwright；playwright、chromium、缺失的系统库会自动补装（用 `apt-get download` 下载后本地解压，不需要 root）。
+- `scripts/doctor.py`：运行前检查，列出每项工具影响哪种产物、怎么安装（macOS / Debian-Ubuntu）。
+- `scripts/make_html.py`：spec → HTML + PNG。截图依赖 playwright；playwright、chromium、缺失的系统库会自动补装（用 `apt-get download` 下载后本地解压，不需要 root），整个截图过程限时 120 秒，离线时会立即说明原因，不会卡住；`--no-install` 可关闭自动安装。
+- `scripts/crop.py`：模式 A 用的局部放大工具，`--box x0,y0,x1,y1 --scale 3` 放大一块，`--grid 3x3` 切成小图。
 - `scripts/make_pptx.py`：spec + 任意模版 → PPTX，含探测和 QA。
 - `scripts/template_probe.py`：可单独运行，查看一个模版的配色映射、版式、标题和安全区。
 - `scripts/render_svg.py` / `scripts/to_pptx.py`：两个渲染器。
 - `scripts/vendor/`：`slidekit.py`、`build_slide.py`、`list_layouts.py`，来自 screenshot-to-template-slide（MIT，见 LICENSE 文件）。
-- `examples/`：`harness_arch.py`（三栏架构）、`steps_pipeline.py`（阶段流水线）、`simple_steps.py`（简单 N 步流程）、`team_grid.py`（卡片网格）。
+- `examples/`：`harness_arch.py`（三栏架构）、`steps_pipeline.py`（阶段流水线）、`simple_steps.py`（简单 N 步流程，附 `simple_steps.source.txt` 文字清单示例）、`team_grid.py`（卡片网格）；`demo-template.pptx.b64` 是虚构品牌 ACME 的示例模版（`--template demo` 使用）。
+- `tests/run_examples.sh OUT_DIR [T.pptx …]`：先跑 doctor，再把所有示例生成 HTML/PNG 和 PPTX；不给模版时用 `demo`。
 - `references/`：`design-system.md`、`layout-patterns.md`、`analysis-checklist.md`、`lessons.md`。

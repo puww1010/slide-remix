@@ -19,4 +19,9 @@
 - **沙盒截图**：playwright 的 chromium 缺 libXdamage 一类系统库时，`make_html.py` 会用 apt-get download 下载并解压到 /tmp，再设置 LD_LIBRARY_PATH，不需要 root。
 - **预览面板截图工具**（screenshot_file_preview）经常拿不到图：以 `make_html.py` 生成的 PNG 为准。
 - **LibreOffice 和 PowerPoint 不一样**：压力渲染图里中英文之间的空隙会被放大，这是渲染差异，不是问题；交付时请用户在 PowerPoint 里再看一遍。
+- **沙盒代理**：有的环境同时设了大写和小写的 `https_proxy`，小写优先。测"离线"时两种都要改，否则看起来离线，其实是通的。
+- **截图卡住**：以前 playwright 安装没有超时，离线时会卡几分钟。现在每一步都有超时，整体限时 120 秒，离线时会在 1–2 秒内报 `[png] FAILED`，HTML 照常保留。
+- **内置基本校验的误判**：有的模版 `[Content_Types].xml` 里 `ContentType` 写在 `Extension` 前面，内置检查会把每个版式都报成"没有 content type"。make_pptx 现在只看比模版新增的问题。
+- **PPTX_SKILL=none**：以前会被当成路径 "none"，校验静默失败却继续往下走。现在 make_pptx / template_probe 自己解析，并把结果显式传给 build_slide。
+- **没装 LibreOffice**：PPTX 仍能生成，但没有预览图，页脚安全区也测不了（按 680px 估）。两种情况都会打 `[WARN]`，交付时必须告诉用户。
 - **字体提醒**：苹方只有 macOS 有；Figtree 等模版字体需要在放映的电脑上安装，或者保存时嵌入字体。
